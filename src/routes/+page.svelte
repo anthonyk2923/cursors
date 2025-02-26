@@ -2,107 +2,194 @@
 	import { onMount } from "svelte";
 
 	const socket = new WebSocket("ws://localhost:8080");
+	//const socket = new WebSocket("ws://192.168.1.3:8080");
 	let curs = [];
-	let mouseX = 1;
-	let mouseY = 1;
+	let bullets = [];
+	let mouseX = 0;
+	let mouseY = 0;
 	let divContainer;
-	let rect = { left: 0, top: 0, width: 0, height: 0 };
-	let sizeInd = 1;
-	let scaleO = 1.4;
-	let scaleW = 1.8;
-	socket.addEventListener("open", () =>
-		console.log("WebSocket connection opened"),
-	);
-	socket.addEventListener("error", (event) =>
-		console.error("WebSocket error:", event),
-	);
-	socket.addEventListener("close", () =>
-		console.log("WebSocket connection closed"),
-	);
-
+	let drawLine = false;
+	let linePoint = { x: 0, y: 0 };
+	let socketId;
+	socket.addEventListener("open", () => console.log("WS connected"));
+	socket.addEventListener("error", console.error);
+	socket.addEventListener("close", () => console.log("WS closed"));
 	socket.addEventListener("message", (event) => {
-		console.log("Message from server:", event.data);
-		const data = JSON.parse(event.data);
-		if (Array.isArray(data)) {
-			curs = data.map((cur) => ({
-				...cur,
-				adjustedX: (cur.x - rect.left) / scale,
-				adjustedY: (cur.y - rect.top) / scale,
-			}));
-		} else {
-			console.error("Received data is not an array:", data);
+		try {
+			const data = JSON.parse(event.data);
+			if (
+				typeof data === "object" &&
+				data.type &&
+				data.payload
+			) {
+				switch (data.type) {
+					case "p":
+						if (
+							Array.isArray(
+								data.payload,
+							)
+						) {
+							curs = data.payload;
+						}
+						break;
+
+					case "b":
+						handleBullet(data.payload);
+						break;
+
+					case "i":
+						if (!socketId) {
+							const idData =
+								JSON.parse(
+									event.data,
+								);
+							socketId =
+								idData.payload
+									.id;
+							console.log(
+								"Assigned socket ID:",
+								socketId,
+							);
+						}
+						break;
+
+					default:
+						console.warn(
+							"Unknown message type:",
+							data.type,
+						);
+				}
+			}
+		} catch (error) {
+			console.log("Raw event data:", event.data);
 		}
 	});
+	function handleBullet(bulletData) {
+		bullets = [...bullets, bulletData];
+		console.log("Before timeout:", bullets);
 
+		setTimeout(() => {
+			bullets = bullets.filter((b) => b !== bulletData);
+			console.log("After timeout:", bullets);
+		}, 500);
+	}
 	const handleMouseMove = (event) => {
 		if (!divContainer) return;
-		rect = divContainer.getBoundingClientRect();
+		const rect = divContainer.getBoundingClientRect();
 
-		mouseX = (event.clientX - rect.left) / scale;
-		mouseY = (event.clientY - rect.top) / scale;
+		mouseX = event.clientX - rect.left;
+		mouseY = event.clientY - rect.top;
 
-		if (mouseY % 10 <= 2 || mouseX % 10 <= 2) {
+		if (event.buttons === 1) {
+			drawLine = true;
+			for (let i = 0; i < curs.length; i++) {
+				if (curs[i].user_id == socketId) {
+					linePoint = {
+						x: curs[i].x,
+						y: curs[i].y,
+					};
+				}
+			}
+		} else {
+			if (drawLine) {
+				sendBullet(mouseX, mouseY, linePoint);
+			}
+			drawLine = false;
+			linePoint = {};
 			if (
 				mouseX >= 0 &&
-				mouseX <= rect.width / scale &&
+				mouseX <= rect.width &&
 				mouseY >= 0 &&
-				mouseY <= rect.height / scale
+				mouseY <= rect.height
 			) {
-				sendData(event.clientX, event.clientY);
-				console.log("done");
+				sendPosition();
 			}
 		}
-
-		console.log("Mouse moved to:", mouseX, mouseY);
 	};
 
-	function sendData(x, y) {
-		const data = JSON.stringify({ x, y });
-		console.log("Sending:", data);
-		socket.send(data);
-	}
+	const sendPosition = () => {
+		socket.send(
+			JSON.stringify({
+				type: "p",
+				payload: { x: mouseX, y: mouseY },
+			}),
+		);
+	};
+	const sendBullet = (mouseX, mouseY, linePoint) => {
+		// Calc direction vector (dx, dy)
+		const dx = mouseX - linePoint.x;
+		const dy = mouseY - linePoint.y;
 
-	onMount(() => {
-		if (divContainer) {
-			rect = divContainer.getBoundingClientRect();
-		}
-	});
+		// Normalize direction vector
+		const magnitude = Math.sqrt(dx * dx + dy * dy);
+		const normalizedDx = dx / magnitude;
+		const normalizedDy = dy / magnitude;
 
-	$: scale = (2 / sizeInd) * scaleO;
+		socket.send(
+			JSON.stringify({
+				type: "b",
+				payload: { dx: normalizedDx, dy: normalizedDy },
+			}),
+		);
+	};
 </script>
 
 <svelte:body on:mousemove={handleMouseMove} />
 
-<div class="flex items-center justify-center h-screen cursor-none">
+<div class="h-screen w-screen cursor-none select-none">
 	<div
 		bind:this={divContainer}
-		class="bg-stone-950 relative"
-		style="
-		width: {96 * scale * scaleW}px;
-		height: {96 * scale}px;
-		transform: scale({scale});
-	"
+		class="bg-stone-950 relative w-full h-full pointer-events-none"
 	>
+		{#if drawLine}
+			<svg
+				class="absolute inset-0 w-full h-full pointer-events-none select-none"
+			>
+				<line
+					x1={linePoint.x}
+					y1={linePoint.y}
+					x2={mouseX}
+					y2={mouseY}
+					stroke="white"
+					stroke-width="2"
+					stroke-dasharray="8,5"
+					stroke-opacity="0.5"
+				/>
+			</svg>
+		{/if}
+		{#each bullets as bul}
+			<svg
+				class="absolute inset-0 w-full h-full pointer-events-none select-none"
+			>
+				<line
+					x1={bul.fromPoint.x}
+					y1={bul.fromPoint.y}
+					x2={bul.isHit.x}
+					y2={bul.isHit.y}
+					stroke={`rgb(${bul.fromPoint.color.r}, ${bul.fromPoint.color.g}, ${bul.fromPoint.color.b}`}
+					stroke-width="2"
+					stroke-linecap="square"
+					stroke-dasharray="2,20"
+					stroke-opacity="0.5"
+				/>
+			</svg>
+		{/each}
 		{#each curs as cur}
 			<div
-				class="absolute"
-				style="left: {cur.adjustedX}px; top: {cur.adjustedY}px;"
+				class="absolute pointer-events-none select-none"
+				style="left: {cur.x}px; top: {cur.y}px;"
 			>
 				<svg
-					class="w-3 h-3"
+					class="w-4 h-4 pointer-events-none select-none"
 					fill="none"
-					stroke="rgb({cur.color.r}, {cur.color
-						.g}, {cur.color.b})"
-					stroke-width="5"
-					version="1.1"
-					xmlns="http://www.w3.org/2000/svg"
-					xmlns:xlink="http://www.w3.org/1999/xlink"
-					viewBox="0 0 203.079 203.079"
-					xml:space="preserve"
+					stroke={`rgb(${cur.color.r}, ${cur.color.g}, ${cur.color.b}`}
+					stroke-width="2"
+					viewBox="0 0 24 24"
 				>
 					<path
-						d="M192.231,104.082V102c0-12.407-10.094-22.5-22.5-22.5c-2.802,0-5.484,0.519-7.961,1.459  C159.665,70.722,150.583,63,139.731,63c-2.947,0-5.76,0.575-8.341,1.61C128.667,55.162,119.624,48,109.231,48  c-2.798,0-5.496,0.541-8,1.516V22.5c0-12.407-10.094-22.5-22.5-22.5s-22.5,10.093-22.5,22.5v66.259  c-3.938-5.029-8.673-9.412-14.169-11.671c-6.133-2.52-12.587-2.219-18.667,0.872c-11.182,5.686-15.792,19.389-10.277,30.548  l27.95,56.563c0.79,1.552,19.731,38.008,54.023,38.008h40c31.54,0,57.199-25.794,57.199-57.506l-0.031-41.491H192.231z   M135.092,188.079h-40c-24.702,0-40.091-28.738-40.646-29.796l-27.88-56.42c-1.924-3.893-0.33-8.519,3.629-10.532  c2.182-1.11,4.081-1.223,6.158-0.372c8.281,3.395,16.41,19.756,19.586,29.265l2.41,7.259l12.883-4.559V22.5  c0-4.136,3.364-7.5,7.5-7.5s7.5,3.364,7.5,7.5V109h0.136h14.864h0.136V71c0-4.187,3.748-8,7.864-8c4.262,0,8,3.505,8,7.5v15v26h15  v-26c0-4.136,3.364-7.5,7.5-7.5s7.5,3.364,7.5,7.5V102v16.5h15V102c0-4.136,3.364-7.5,7.5-7.5s7.5,3.364,7.5,7.5v10.727h0.035  l0.025,32.852C177.291,169.014,158.36,188.079,135.092,188.079z"
+						d="M12 2C8.134 2 5 5.134 5 9c0 5 7 13 7 13s7-8 7-13c0-3.866-3.134-7-7-7z"
 					/>
+					<circle cx="12" cy="9" r="2.5" />
 				</svg>
 			</div>
 		{/each}

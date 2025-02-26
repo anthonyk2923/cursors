@@ -24,16 +24,14 @@ type Point struct {
 	UserID string `json:"user_id"`
 	Color  Color  `json:"color"`
 }
-
 type DVector struct {
-	DX float64 `json:"dx"` // Changed to float64
-	DY float64 `json:"dy"` // Changed to float64
+	DX int `json:"dx"`
+	DY int `json:"dy"`
 }
-
 type Bullet struct {
-	ToVector  DVector `json:"toVector"`
-	IsHit     Point   `json:"isHit"`
-	FromPoint Point   `json:"fromPoint"`
+	ToVector DVector `json:"toVector"`
+	FromId   string  `json:"fromId"`
+	IsHit    Point   `json:"isHit"`
 }
 
 type Message struct {
@@ -56,6 +54,7 @@ var upgrader = websocket.Upgrader{
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
+
 	if err != nil {
 		log.Println(err)
 		return
@@ -64,32 +63,23 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	userID := uuid.New().String()
 
 	color := Color{
-		R: uint8(200 + rand.Intn(56)), // 200-255 (ensures brightness)
-		G: uint8(rand.Intn(200)),      // 0-199 (adds contrast)
-		B: uint8(rand.Intn(200)),      // 0-199 (adds contrast)
-	}
-
-	// Shuffle R, G, B to ensure different dominant colors
-	perm := rand.Perm(3)
-	shuffled := [3]uint8{color.R, color.G, color.B}
-
-	color = Color{
-		R: shuffled[perm[0]],
-		G: shuffled[perm[1]],
-		B: shuffled[perm[2]],
+		R: uint8(rand.Intn(256)),
+		G: uint8(rand.Intn(256)),
+		B: uint8(rand.Intn(256)),
 	}
 
 	mu.Lock()
 	connections[userID] = conn
-	idData := map[string]string{"id": userID}
-
+	conn.WriteMessage(websocket.TextMessage, []byte(userID))
 	log.Println("New connection:", userID)
-	broadcastData("i", idData)
+
 	points[userID] = Point{UserID: userID, Color: color}
 
 	existingPoints := make([]Point, 0, len(points))
 	for _, p := range points {
+
 		existingPoints = append(existingPoints, p)
+
 	}
 	data, err := json.Marshal(existingPoints)
 	if err == nil {
@@ -144,6 +134,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			broadcastPoints()
 
 		case "b":
+			log.Println("--------")
 			var bullet Bullet
 			var d DVector
 			if err := json.Unmarshal(msg.Payload, &d); err != nil {
@@ -151,23 +142,24 @@ func handler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			mu.Lock()
+			bullet.FromId = userID
 			bullet.ToVector = d
-			log.Printf("Bullet received: dx=%f, dy=%f", d.DX, d.DY)
+			log.Println("Bullet received:", bullet)
 
 			if point, exists := points[userID]; exists {
-				bullet.FromPoint = point
-				updatedPoints := make([]Point, 0, len(points))
-				for _, p := range points {
-					updatedPoints = append(updatedPoints, p)
-				}
-				checkHit := checkHit(point, d, updatedPoints)
+				checkHit := checkHit(point, d, existingPoints)
 				if checkHit == nil {
-					log.Println("No points hit")
+					log.Println("no points hit")
 				} else {
-					log.Println("Bullet hit:", checkHit.UserID)
-					bullet.IsHit = *checkHit
-					broadcastData("b", bullet)
+					log.Println(checkHit)
+					data, err := json.Marshal(checkHit)
+					if err != nil {
+						log.Println("Error marshaling hit point:", err)
+						continue
+					}
+					// broadcastBullets(data)
 				}
+
 			} else {
 				log.Println("No point found for userID:", userID)
 			}
@@ -177,68 +169,44 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
-func checkHit(shooter Point, direction DVector, cursors []Point) *Point {
-	x1 := float64(shooter.X)
-	y1 := float64(shooter.Y)
-
-	dx := direction.DX
-	dy := direction.DY
-
+func checkHit(point Point, d DVector, cursors []Point) *Point {
+	x1 := point.X
+	y1 := point.Y
+	log.Println(x1, y1)
+	log.Println("=")
 	for _, cursor := range cursors {
-		if cursor.UserID == shooter.UserID {
-			continue
-		}
+		if cursor.UserID != point.UserID {
+			log.Print(cursor)
+			cx := cursor.X
+			cy := cursor.Y
 
-		cx := float64(cursor.X)
-		cy := float64(cursor.Y)
+			numer := math.Abs(float64(cx-x1)*float64(d.DY) - float64(cy-y1)*float64(d.DX))
+			denom := math.Sqrt(float64(d.DX*d.DX + d.DY*d.DY))
+			D := numer / denom
 
-		// Vector from shooter to cursor
-		vx := cx - x1
-		vy := cy - y1
-
-		// Project vector onto bullet dir
-		projection := vx*dx + vy*dy
-
-		// check if cursor behind shooter
-		if projection < 0 {
-			continue
-		}
-
-		//Calc perpendicular distance  -> cursor to trajectory
-		distance := math.Abs(vx*dy - vy*dx)
-
-		if distance <= float64(radius) {
-			if cursor.X != 0 && cursor.Y != 0 {
+			if D <= float64(radius) {
 				return &cursor
-			} else {
-				log.Println("point at 0,0")
 			}
 		}
 	}
 	return nil
 }
+func broadcastPoints() {
+	mu.Lock()
+	defer mu.Unlock()
 
-func broadcastData(msgType string, payload any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Println("Error encoding payload:", err)
-		return
+	updatedPoints := make([]Point, 0, len(points))
+	for _, p := range points {
+
+		if p.X != 0 || p.Y != 0 {
+			updatedPoints = append(updatedPoints, p)
+		}
 	}
 
-	message := Message{
-		Type:    msgType,
-		Payload: data,
-	}
-
-	messageData, err := json.Marshal(message)
-	if err != nil {
-		log.Println("Error encoding message:", err)
-		return
-	}
+	data, _ := json.Marshal(updatedPoints)
 
 	for userID, conn := range connections {
-		if err := conn.WriteMessage(websocket.TextMessage, messageData); err != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			log.Println("Error broadcasting to", userID, ":", err)
 			conn.Close()
 			delete(connections, userID)
@@ -246,21 +214,22 @@ func broadcastData(msgType string, payload any) {
 		}
 	}
 }
-func broadcastPoints() {
+func broadcastBullets(data []byte) {
 	mu.Lock()
-	updatedPoints := make([]Point, 0, len(points))
-	for _, p := range points {
-		if p.X != 0 || p.Y != 0 {
-			updatedPoints = append(updatedPoints, p)
+	defer mu.Unlock()
+
+	for userID, conn := range connections {
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			log.Println("Error broadcasting to", userID, ":", err)
+			conn.Close()
+			delete(connections, userID)
+			delete(points, userID)
 		}
 	}
-	mu.Unlock()
-
-	broadcastData("p", updatedPoints)
 }
 
 func main() {
 	http.HandleFunc("/", handler)
 	log.Println("Server started on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	http.ListenAndServe(":8080", nil)
 }
