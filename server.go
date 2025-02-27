@@ -265,7 +265,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	http.HandleFunc("/", handler)
+	http.HandleFunc("/ws", handler)
 	log.Println("Server started on :" + port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
