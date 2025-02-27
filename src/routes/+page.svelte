@@ -1,7 +1,8 @@
 <script>
 	import { onMount } from "svelte";
 
-	const socket = new WebSocket("ws://localhost:8080");
+	//const socket = new WebSocket("ws://localhost:8080");
+	const socket = new WebSocket("wss://cursorsserver.onrender.com/ws");
 	//const socket = new WebSocket("ws://192.168.1.3:8080");
 	let curs = [];
 	let bullets = [];
