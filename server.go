@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/google/uuid"
@@ -46,6 +47,7 @@ var (
 	points      = make(map[string]Point)
 	mu          sync.Mutex
 	radius      = 100
+	port        = os.Getenv("PORT")
 )
 
 var upgrader = websocket.Upgrader{
@@ -260,6 +262,9 @@ func broadcastPoints() {
 }
 
 func main() {
+	if port == "" {
+		port = "8080"
+	}
 	http.HandleFunc("/", handler)
 	log.Println("Server started on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
