@@ -266,6 +266,6 @@ func main() {
 		port = "8080"
 	}
 	http.HandleFunc("/", handler)
-	log.Println("Server started on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Println("Server started on :" + port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
