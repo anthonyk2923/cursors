@@ -1,38 +1,79 @@
-# sv
+# cursors
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A multiplayer cursor world. Every visitor sees everyone else's mouse cursor
+move in real time over a shared dark canvas — and can drag to aim and fire a
+line-trace "bullet" at other cursors, with hit detection resolved on the
+server.
 
-## Creating a project
+This was my first Go project, built to learn WebSockets and real-time state
+broadcasting.
 
-If you're seeing this, you've probably already done this step. Congrats!
+**Live:** https://cursorsserver.onrender.com (frontend connects to the hosted
+WebSocket server)
 
-```bash
-# create a new project in the current directory
-npx sv create
+## How it works
 
-# create a new project in my-app
-npx sv create my-app
+- **Server** (`server.go`) — a Go WebSocket server (`gorilla/websocket`). It
+  assigns each connection a UUID and a random bright color, keeps every
+  cursor's position in an in-memory map guarded by a mutex, and broadcasts the
+  full set of active cursors to all clients on every update.
+- **Client** (`src/routes/+page.svelte`) — a SvelteKit + Tailwind app. It
+  tracks the local mouse position, sends it over the socket, and renders every
+  other cursor as an SVG marker. Click-drag draws an aim line; releasing fires
+  a bullet.
+- **Protocol** — small JSON messages tagged by type:
+  | Type | Direction | Meaning |
+  | ---- | --------- | ------- |
+  | `i`  | server → client | assigns the client its user ID |
+  | `p`  | both      | cursor position / broadcast of all positions |
+  | `b`  | both      | bullet: client sends a normalized direction vector, server replies with the hit |
+- **Hit detection** (`checkHit` in `server.go`) — projects each other cursor
+  onto the bullet's direction vector and checks the perpendicular distance
+  against a fixed radius.
+
+## Running locally
+
+### Server
+
+```sh
+go run server.go
+# listens on :8080 by default, or $PORT if set
 ```
 
-## Developing
+### Frontend
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```bash
+```sh
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
+Then point the client at your local server by editing the `WebSocket` URL near
+the top of `src/routes/+page.svelte`:
 
-To create a production version of your app:
-
-```bash
-npm run build
+```js
+const socket = new WebSocket("ws://localhost:8080/ws");
 ```
 
-You can preview the production build with `npm run preview`.
+## Building for production
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+```sh
+npm run build     # builds the SvelteKit app into build/
+```
+
+The server is a standalone Go binary (`go build`) and the deployed instance
+runs on Render.
+
+## Tech stack
+
+- Go, `gorilla/websocket`, `google/uuid`
+- SvelteKit 2, Svelte 5, Tailwind CSS 4, Vite 6
+
+## Known limitations
+
+- All state is in memory, so a server restart clears every cursor.
+- No rate limiting or authentication; `CheckOrigin` allows all origins.
+- Cursors at `(0, 0)` are treated as "not yet positioned" and filtered out.
+
+## License
+
+No license has been specified yet.
